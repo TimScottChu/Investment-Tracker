@@ -34,6 +34,7 @@ type LedgerLine = InvestmentTransaction & {
 
 const STORAGE_KEY = "investment-tracker-v1";
 const PRICE_KEY = "investment-tracker-prices-v1";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const ASSETS: Asset[] = ["ETH", "USDT"];
 
 const money = new Intl.NumberFormat("en-US", {
@@ -176,7 +177,7 @@ export default function Home() {
       setToast("Saved data could not be read. Your tracker started empty.");
     }
     setReady(true);
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register(`${BASE_PATH}/sw.js`).catch(() => undefined);
   }, []);
 
   useEffect(() => {

@@ -16,6 +16,8 @@ Mobile-first PWA for manually logging cryptocurrency buys and sells in USD.
 
 No Binance account connection or API credentials are used. Transaction data remains in the browser unless exported.
 
+GitHub Pages: `https://timscottchu.github.io/Investment-Tracker/`
+
 ## Local development
 
 ```text
