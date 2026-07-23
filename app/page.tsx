@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Asset = "ETH" | "USDT";
 type TransactionType = "buy" | "sell";
-type View = "overview" | "add" | "ledger" | "settings";
+type View = "overview" | "add" | "ledger" | "feedback" | "settings";
 
 type InvestmentTransaction = {
   id: string;
@@ -34,6 +34,8 @@ type LedgerLine = InvestmentTransaction & {
 
 const STORAGE_KEY = "investment-tracker-v1";
 const PRICE_KEY = "investment-tracker-prices-v1";
+const FEEDBACK_KEY = "investment-tracker-feedback-v1";
+const APP_VERSION = "1.1.0";
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const ASSETS: Asset[] = ["ETH", "USDT"];
 
@@ -125,6 +127,7 @@ export default function Home() {
   const [filter, setFilter] = useState<"ALL" | Asset>("ALL");
   const [prices, setPrices] = useState<Record<Asset, number>>({ ETH: 0, USDT: 1 });
   const [priceStatus, setPriceStatus] = useState("Manual price");
+  const [feedback, setFeedback] = useState("");
   const [toast, setToast] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -173,6 +176,7 @@ export default function Home() {
       if (saved) setTransactions(JSON.parse(saved));
       const savedPrices = localStorage.getItem(PRICE_KEY);
       if (savedPrices) setPrices({ ...JSON.parse(savedPrices), USDT: 1 });
+      setFeedback(localStorage.getItem(FEEDBACK_KEY) || "");
     } catch {
       setToast("Saved data could not be read. Your tracker started empty.");
     }
@@ -189,6 +193,11 @@ export default function Home() {
     if (!ready) return;
     localStorage.setItem(PRICE_KEY, JSON.stringify(prices));
   }, [prices, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    localStorage.setItem(FEEDBACK_KEY, feedback);
+  }, [feedback, ready]);
 
   useEffect(() => {
     if (!toast) return;
@@ -313,7 +322,7 @@ export default function Home() {
   function exportBackup() {
     download(
       `investment-tracker-backup-${localDateParts().date}.json`,
-      JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), transactions, prices }, null, 2),
+      JSON.stringify({ version: APP_VERSION, exportedAt: new Date().toISOString(), transactions, prices, feedback }, null, 2),
       "application/json",
     );
   }
@@ -327,6 +336,7 @@ export default function Home() {
         if (!Array.isArray(parsed.transactions)) throw new Error("Invalid backup");
         setTransactions(parsed.transactions);
         if (parsed.prices) setPrices({ ...parsed.prices, USDT: 1 });
+        if (typeof parsed.feedback === "string") setFeedback(parsed.feedback);
         setToast("Backup restored.");
         setView("overview");
       } catch {
@@ -336,6 +346,24 @@ export default function Home() {
     reader.readAsText(file);
   }
 
+  function exportFeedback() {
+    const contents = [
+      "Investment Tracker Feedback",
+      `App version: ${APP_VERSION}`,
+      `Exported: ${new Date().toLocaleString()}`,
+      "",
+      feedback.trim() || "No feedback recorded.",
+      "",
+    ].join("\n");
+    download(`investment-tracker-feedback-v${APP_VERSION}-${localDateParts().date}.txt`, contents, "text/plain");
+  }
+
+  function clearFeedback() {
+    if (!feedback || !confirm("Clear all feedback notes?")) return;
+    setFeedback("");
+    setToast("Feedback cleared.");
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -343,7 +371,7 @@ export default function Home() {
           <span className="brand-mark">IT</span>
           <span><b>Investment</b><small>TRACKER</small></span>
         </button>
-        <span className="local-pill"><i /> Saved on this device</span>
+        <span className="local-pill"><i /> Saved on this device · v{APP_VERSION}</span>
       </header>
 
       {view === "overview" && (
@@ -450,7 +478,7 @@ export default function Home() {
           <div className="page-heading"><p className="eyebrow">DATA</p><h1>Backup & export</h1><p>Your ledger stays in this browser. Keep a backup before clearing site data or changing phones.</p></div>
           <section className="settings-card">
             <button onClick={exportCsv}><span className="settings-icon">CSV</span><div><strong>Export spreadsheet</strong><small>All transactions and realized gains</small></div><b>↓</b></button>
-            <button onClick={exportBackup}><span className="settings-icon">JSON</span><div><strong>Download backup</strong><small>Ledger and reference prices</small></div><b>↓</b></button>
+            <button onClick={exportBackup}><span className="settings-icon">JSON</span><div><strong>Download backup</strong><small>Ledger, feedback, and reference prices</small></div><b>↓</b></button>
             <button onClick={() => importRef.current?.click()}><span className="settings-icon">UP</span><div><strong>Restore backup</strong><small>Import a previous JSON backup</small></div><b>↑</b></button>
             <input ref={importRef} hidden type="file" accept="application/json" onChange={(event) => { importBackup(event.target.files?.[0]); event.target.value = ""; }} />
           </section>
@@ -458,10 +486,26 @@ export default function Home() {
         </div>
       )}
 
+      {view === "feedback" && (
+        <div className="screen feedback-screen">
+          <div className="page-heading"><p className="eyebrow">TRIAL NOTES · v{APP_VERSION}</p><h1>Feedback journal</h1><p>Record anything that feels confusing, slow, missing, or especially useful while you try the app.</p></div>
+          <section className="feedback-card">
+            <div className="feedback-card-heading"><div><strong>Your notes</strong><small>Saved automatically on this device</small></div><span>v{APP_VERSION}</span></div>
+            <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder={"Try noting:\n• What you were trying to do\n• What felt unclear or took too many taps\n• What number or view you expected to see"} aria-label="Investment Tracker feedback notes" />
+            <div className="feedback-actions">
+              <button className="feedback-export" onClick={exportFeedback}>Export feedback TXT <span>↓</span></button>
+              <button className="feedback-clear" onClick={clearFeedback} disabled={!feedback}>Clear</button>
+            </div>
+          </section>
+          <aside className="feedback-tip"><span>✦</span><div><strong>Useful feedback is specific</strong><p>Include the asset, action, and screen you were using. The exported file automatically includes this app version.</p></div></aside>
+        </div>
+      )}
+
       <nav className="bottom-nav" aria-label="Main navigation">
         <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}><span>⌂</span>Overview</button>
         <button className={view === "ledger" ? "active" : ""} onClick={() => setView("ledger")}><span>≡</span>Ledger</button>
         <button className="add-nav" onClick={() => openAdd("buy")} aria-label="Add transaction"><span>＋</span></button>
+        <button className={view === "feedback" ? "active" : ""} onClick={() => setView("feedback")}><span>✎</span>Feedback</button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><span>↓</span>Data</button>
       </nav>
       {toast && <div className="toast" role="status">{toast}</div>}

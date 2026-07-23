@@ -13,6 +13,7 @@ Mobile-first PWA for manually logging cryptocurrency buys and sells in USD.
 - Editable ledger entries
 - CSV export and JSON backup/restore
 - Device-local storage and offline app shell
+- Versioned feedback journal with TXT export
 
 No Binance account connection or API credentials are used. Transaction data remains in the browser unless exported.
 
