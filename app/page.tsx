@@ -35,7 +35,7 @@ type LedgerLine = InvestmentTransaction & {
 const STORAGE_KEY = "investment-tracker-v1";
 const PRICE_KEY = "investment-tracker-prices-v1";
 const FEEDBACK_KEY = "investment-tracker-feedback-v1";
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const ASSETS: Asset[] = ["ETH", "USDT"];
 

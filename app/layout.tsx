@@ -9,7 +9,10 @@ export const metadata: Metadata = {
   title: "Investment Tracker",
   description: "A private, mobile-first ledger for crypto buys, sells, holdings, and weighted-average gains.",
   manifest: `${basePath}/manifest.webmanifest`,
-  icons: { icon: `${basePath}/icon-192.png`, apple: `${basePath}/icon-192.png` },
+  icons: {
+    icon: `${basePath}/investment-icon-192-v2.png`,
+    apple: `${basePath}/investment-icon-192-v2.png`,
+  },
   openGraph: {
     title: "Investment Tracker",
     description: "Know every move. See every gain.",
