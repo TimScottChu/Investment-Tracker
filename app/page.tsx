@@ -3,7 +3,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Asset = "ETH" | "USDT";
-type TransactionType = "buy" | "sell";
+type TransactionType = "buy" | "sell" | "convert";
+type ConversionDirection = "USDT_TO_ETH" | "ETH_TO_USDT";
 type View = "overview" | "add" | "ledger" | "feedback" | "settings";
 
 type InvestmentTransaction = {
@@ -17,6 +18,8 @@ type InvestmentTransaction = {
   time: string;
   note: string;
   createdAt: string;
+  fromAsset?: Asset;
+  toAsset?: Asset;
 };
 
 type Position = {
@@ -35,7 +38,7 @@ type LedgerLine = InvestmentTransaction & {
 const STORAGE_KEY = "investment-tracker-v1";
 const PRICE_KEY = "investment-tracker-prices-v1";
 const FEEDBACK_KEY = "investment-tracker-feedback-v1";
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.2.0";
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const ASSETS: Asset[] = ["ETH", "USDT"];
 
@@ -69,11 +72,54 @@ function calculateLedger(transactions: InvestmentTransaction[]) {
   );
 
   for (const transaction of sorted) {
-    const position = positions[transaction.asset];
+    let position = positions[transaction.asset];
     let realizedGain: number | null = null;
     let realizedPercent: number | null = null;
 
-    if (transaction.type === "buy") {
+    if (transaction.type === "convert") {
+      const fromAsset = transaction.fromAsset || "USDT";
+      const eth = positions.ETH;
+      const usdt = positions.USDT;
+
+      if (fromAsset === "USDT") {
+        usdt.quantity -= transaction.usdAmount;
+        usdt.cost -= transaction.usdAmount;
+        eth.quantity += transaction.quantity;
+        eth.cost += transaction.usdAmount;
+      } else {
+        const averageCost = eth.quantity > 0 ? eth.cost / eth.quantity : 0;
+        const disposedCost = averageCost * transaction.quantity;
+        realizedGain = transaction.usdAmount - disposedCost;
+        realizedPercent = disposedCost > 0 ? (realizedGain / disposedCost) * 100 : 0;
+        eth.quantity -= transaction.quantity;
+        eth.cost -= disposedCost;
+        eth.realized += realizedGain;
+        eth.disposedCost += disposedCost;
+        usdt.quantity += transaction.usdAmount;
+        usdt.cost += transaction.usdAmount;
+      }
+      if (Math.abs(eth.quantity) < 1e-10) {
+        eth.quantity = 0;
+        eth.cost = 0;
+      }
+      if (Math.abs(usdt.quantity) < 1e-8) {
+        usdt.quantity = 0;
+        usdt.cost = 0;
+      }
+      position = eth;
+    } else if (transaction.asset === "USDT") {
+      if (transaction.type === "buy") {
+        position.quantity += transaction.quantity;
+        position.cost += transaction.quantity;
+      } else {
+        position.quantity -= transaction.quantity;
+        position.cost -= transaction.quantity;
+        if (Math.abs(position.quantity) < 1e-8) {
+          position.quantity = 0;
+          position.cost = 0;
+        }
+      }
+    } else if (transaction.type === "buy") {
       position.quantity += transaction.quantity;
       position.cost += transaction.usdAmount;
     } else {
@@ -117,6 +163,7 @@ export default function Home() {
   const [transactions, setTransactions] = useState<InvestmentTransaction[]>([]);
   const [ready, setReady] = useState(false);
   const [entryType, setEntryType] = useState<TransactionType>("buy");
+  const [convertDirection, setConvertDirection] = useState<ConversionDirection>("USDT_TO_ETH");
   const [asset, setAsset] = useState<Asset>("ETH");
   const [usdAmount, setUsdAmount] = useState("");
   const [rate, setRate] = useState("");
@@ -135,7 +182,7 @@ export default function Home() {
   const sortedTransactions = useMemo(
     () =>
       [...transactions]
-        .filter((item) => filter === "ALL" || item.asset === filter)
+        .filter((item) => filter === "ALL" || item.asset === filter || item.fromAsset === filter || item.toAsset === filter)
         .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)),
     [transactions, filter],
   );
@@ -154,10 +201,9 @@ export default function Home() {
     );
     const openCost = ASSETS.reduce((sum, item) => sum + positions[item].cost, 0);
     const realized = ASSETS.reduce((sum, item) => sum + positions[item].realized, 0);
-    const disposedCost = ASSETS.reduce((sum, item) => sum + positions[item].disposedCost, 0);
     const unrealized = currentValue - openCost;
     const totalGain = realized + unrealized;
-    const measuredCost = openCost + disposedCost;
+    const measuredCost = positions.ETH.cost + positions.ETH.disposedCost;
     return {
       currentValue,
       openCost,
@@ -168,7 +214,15 @@ export default function Home() {
     };
   }, [positions, effectivePrices]);
 
-  const computedQuantity = Number(usdAmount) > 0 && Number(rate) > 0 ? Number(usdAmount) / Number(rate) : 0;
+  const amountNumber = Number(usdAmount);
+  const rateNumber = Number(rate);
+  const computedQuantity =
+    amountNumber > 0 && rateNumber > 0
+      ? entryType === "convert" && convertDirection === "ETH_TO_USDT"
+        ? amountNumber * rateNumber
+        : amountNumber / rateNumber
+      : 0;
+  const receivedAsset: Asset = entryType === "convert" && convertDirection === "ETH_TO_USDT" ? "USDT" : asset;
 
   useEffect(() => {
     try {
@@ -223,25 +277,41 @@ export default function Home() {
     if (!rate || asset === "USDT") setRate(nextAsset === "USDT" ? "1" : effectivePrices.ETH ? String(effectivePrices.ETH) : "");
   }
 
+  function chooseConversionDirection(nextDirection: ConversionDirection) {
+    setConvertDirection(nextDirection);
+    setAsset("ETH");
+    setUsdAmount("");
+    setRate(effectivePrices.ETH ? String(effectivePrices.ETH) : "");
+  }
+
   function saveTransaction(event: FormEvent) {
     event.preventDefault();
-    const amountNumber = Number(usdAmount);
-    const rateNumber = Number(rate);
     if (!(amountNumber > 0) || !(rateNumber > 0)) {
-      setToast("Enter a valid USD amount and execution rate.");
+      setToast(`Enter a valid ${entryType === "convert" ? "conversion amount" : "USD amount"} and execution rate.`);
       return;
     }
 
+    const isConversion = entryType === "convert";
+    const fromAsset: Asset | undefined = isConversion
+      ? convertDirection === "USDT_TO_ETH" ? "USDT" : "ETH"
+      : undefined;
+    const toAsset: Asset | undefined = isConversion
+      ? convertDirection === "USDT_TO_ETH" ? "ETH" : "USDT"
+      : undefined;
+    const conversionUsdAmount = convertDirection === "USDT_TO_ETH" ? amountNumber : amountNumber * rateNumber;
+    const conversionEthQuantity = convertDirection === "USDT_TO_ETH" ? amountNumber / rateNumber : amountNumber;
     const nextTransaction: InvestmentTransaction = {
       id: editingId || crypto.randomUUID(),
       type: entryType,
-      asset,
-      usdAmount: amountNumber,
+      asset: isConversion ? "ETH" : asset,
+      usdAmount: isConversion ? conversionUsdAmount : amountNumber,
       rate: rateNumber,
-      quantity: amountNumber / rateNumber,
+      quantity: isConversion ? conversionEthQuantity : amountNumber / rateNumber,
       date,
       time,
       note: note.trim(),
+      fromAsset,
+      toAsset,
       createdAt: editingId
         ? transactions.find((item) => item.id === editingId)?.createdAt || new Date().toISOString()
         : new Date().toISOString(),
@@ -254,16 +324,23 @@ export default function Home() {
     const valid = [...candidate]
       .sort((a, b) => `${a.date}T${a.time}-${a.createdAt}`.localeCompare(`${b.date}T${b.time}-${b.createdAt}`))
       .every((item) => {
-        running[item.asset] += item.type === "buy" ? item.quantity : -item.quantity;
-        return running[item.asset] >= -1e-8;
+        if (item.type === "convert") {
+          const conversionFrom = item.fromAsset || "USDT";
+          running.USDT += conversionFrom === "USDT" ? -item.usdAmount : item.usdAmount;
+          running.ETH += conversionFrom === "ETH" ? -item.quantity : item.quantity;
+        } else {
+          running[item.asset] += item.type === "buy" ? item.quantity : -item.quantity;
+        }
+        return running.ETH >= -1e-8 && running.USDT >= -1e-8;
       });
     if (!valid) {
-      setToast(`That sale is larger than your available ${asset} at that point in the ledger.`);
+      const neededAsset = isConversion ? fromAsset : asset;
+      setToast(`That movement is larger than your available ${neededAsset} at that point in the ledger.`);
       return;
     }
 
     setTransactions(candidate);
-    setToast(editingId ? "Transaction updated." : `${asset} ${entryType} added.`);
+    setToast(editingId ? "Transaction updated." : isConversion ? "Conversion added." : `${asset} ${entryType} added.`);
     setEditingId(null);
     setView("ledger");
   }
@@ -272,7 +349,9 @@ export default function Home() {
     setEditingId(item.id);
     setEntryType(item.type);
     setAsset(item.asset);
-    setUsdAmount(String(item.usdAmount));
+    const itemDirection: ConversionDirection = item.fromAsset === "ETH" ? "ETH_TO_USDT" : "USDT_TO_ETH";
+    setConvertDirection(itemDirection);
+    setUsdAmount(String(item.type === "convert" && itemDirection === "ETH_TO_USDT" ? item.quantity : item.usdAmount));
     setRate(String(item.rate));
     setDate(item.date);
     setTime(item.time);
@@ -306,12 +385,12 @@ export default function Home() {
   }
 
   function exportCsv() {
-    const header = ["Type", "Asset", "USD amount", "Rate USD", "Quantity", "Date", "Time", "Realized gain USD", "Realized gain %", "Note"];
+    const header = ["Type", "Asset", "From asset", "To asset", "USD/USDT amount", "ETH quantity", "Rate USDT per ETH", "Date", "Time", "Realized gain USDT", "Realized gain %", "Note"];
     const rows = [...transactions]
       .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
       .map((item) => {
         const line = lineMap.get(item.id);
-        return [item.type, item.asset, item.usdAmount, item.rate, item.quantity, item.date, item.time, line?.realizedGain ?? "", line?.realizedPercent ?? "", item.note];
+        return [item.type, item.asset, item.fromAsset ?? "", item.toAsset ?? "", item.usdAmount, item.quantity, item.rate, item.date, item.time, line?.realizedGain ?? "", line?.realizedPercent ?? "", item.note];
       });
     const csv = [header, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
@@ -383,7 +462,7 @@ export default function Home() {
               <div className={`return-chip ${totals.totalGain >= 0 ? "positive" : "negative"}`}>
                 {signedMoney(totals.totalGain)} <span>{percent(totals.totalPercent)}</span>
               </div>
-              <p className="muted">Realized + open-position movement</p>
+              <p className="muted">ETH performance measured in USDT ≈ USD</p>
             </div>
             <div className="hero-orbit" aria-hidden="true"><span>Ξ</span></div>
           </section>
@@ -441,15 +520,25 @@ export default function Home() {
             <div className="segmented" aria-label="Transaction type">
               <button type="button" className={entryType === "buy" ? "selected buy" : ""} onClick={() => setEntryType("buy")}>Buy</button>
               <button type="button" className={entryType === "sell" ? "selected sell" : ""} onClick={() => setEntryType("sell")}>Sell</button>
+              <button type="button" className={entryType === "convert" ? "selected convert" : ""} onClick={() => { setEntryType("convert"); setAsset("ETH"); setRate(effectivePrices.ETH ? String(effectivePrices.ETH) : ""); }}>Convert</button>
             </div>
 
-            <fieldset className="asset-picker"><legend>Asset</legend>{ASSETS.map((item) => <button type="button" key={item} className={asset === item ? "selected" : ""} onClick={() => chooseAsset(item)}><span className={`coin small ${item.toLowerCase()}`}>{item === "ETH" ? "Ξ" : "₮"}</span>{item}</button>)}</fieldset>
+            {entryType === "convert" ? (
+              <fieldset className="conversion-picker">
+                <legend>Direction</legend>
+                <button type="button" className={convertDirection === "USDT_TO_ETH" ? "selected" : ""} onClick={() => chooseConversionDirection("USDT_TO_ETH")}><span>₮</span> USDT <b>→</b> <span>Ξ</span> ETH</button>
+                <button type="button" className={convertDirection === "ETH_TO_USDT" ? "selected" : ""} onClick={() => chooseConversionDirection("ETH_TO_USDT")}><span>Ξ</span> ETH <b>→</b> <span>₮</span> USDT</button>
+              </fieldset>
+            ) : (
+              <fieldset className="asset-picker"><legend>Asset</legend>{ASSETS.map((item) => <button type="button" key={item} className={asset === item ? "selected" : ""} onClick={() => chooseAsset(item)}><span className={`coin small ${item.toLowerCase()}`}>{item === "ETH" ? "Ξ" : "₮"}</span>{item}</button>)}</fieldset>
+            )}
 
-            <label className="amount-field"><span>USD amount</span><div><b>$</b><input autoFocus inputMode="decimal" type="number" min="0" step="any" placeholder="0.00" value={usdAmount} onChange={(event) => setUsdAmount(event.target.value)} required /></div></label>
+            <label className="amount-field"><span>{entryType === "convert" ? `${convertDirection === "USDT_TO_ETH" ? "USDT" : "ETH"} to convert` : "USD amount"}</span><div><b>{entryType === "convert" ? convertDirection === "USDT_TO_ETH" ? "₮" : "Ξ" : "$"}</b><input autoFocus inputMode="decimal" type="number" min="0" step="any" placeholder="0.00" value={usdAmount} onChange={(event) => setUsdAmount(event.target.value)} required /></div></label>
 
-            <label className="standard-field"><span>Execution rate <small>USD per {asset}</small></span><div className="prefix-input"><b>$</b><input inputMode="decimal" type="number" min="0" step="any" placeholder={asset === "USDT" ? "1.00" : "0.00"} value={rate} onChange={(event) => setRate(event.target.value)} required /></div></label>
+            <label className="standard-field"><span>Execution rate <small>{entryType === "convert" ? "USDT per ETH" : `USD per ${asset}`}</small></span><div className="prefix-input"><b>{entryType === "convert" ? "₮" : "$"}</b><input inputMode="decimal" type="number" min="0" step="any" placeholder={entryType !== "convert" && asset === "USDT" ? "1.00" : "0.00"} value={rate} onChange={(event) => setRate(event.target.value)} required /></div></label>
 
-            <div className="quantity-preview"><span>You {entryType === "buy" ? "receive" : "sold"}</span><strong>≈ {quantity(computedQuantity, asset)}</strong></div>
+            <div className="quantity-preview"><span>You {entryType === "sell" ? "sold" : "receive"}</span><strong>≈ {quantity(computedQuantity, receivedAsset)}</strong></div>
+            {entryType === "convert" && <p className="conversion-note">Conversions transfer value between USDT and ETH. Only ETH performance creates gain or loss; results are measured in USDT.</p>}
 
             <div className="date-grid">
               <label className="standard-field"><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
@@ -457,7 +546,7 @@ export default function Home() {
             </div>
             <label className="standard-field"><span>Note <small>optional</small></span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Binance spot" maxLength={120} /></label>
 
-            <button className={`primary-action ${entryType}`} type="submit">{editingId ? "Save changes" : `Add ${entryType}`} <span>→</span></button>
+            <button className={`primary-action ${entryType}`} type="submit">{editingId ? "Save changes" : entryType === "convert" ? "Add conversion" : `Add ${entryType}`} <span>→</span></button>
             {editingId && <button className="delete-button" type="button" onClick={deleteTransaction}>Delete transaction</button>}
           </form>
         </div>
@@ -465,7 +554,7 @@ export default function Home() {
 
       {view === "ledger" && (
         <div className="screen ledger-screen">
-          <div className="page-heading"><p className="eyebrow">HISTORY</p><h1>Transaction ledger</h1><p>Every movement, with gains calculated using weighted-average cost.</p></div>
+          <div className="page-heading"><p className="eyebrow">HISTORY</p><h1>Transaction ledger</h1><p>Buys, sells, and conversions. ETH gains are calculated with weighted-average cost and measured in USDT.</p></div>
           <div className="filter-row">{(["ALL", "ETH", "USDT"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "ALL" ? "All movements" : item}</button>)}</div>
           <section className="ledger-list">
             {sortedTransactions.length ? sortedTransactions.map((item) => <TransactionRow item={item} line={lineMap.get(item.id)} key={item.id} onClick={() => editTransaction(item)} />) : <EmptyLedger onAdd={() => openAdd("buy")} />}
@@ -514,15 +603,20 @@ export default function Home() {
 }
 
 function TransactionRow({ item, line, onClick }: { item: InvestmentTransaction; line?: LedgerLine; onClick: () => void }) {
+  const isConversion = item.type === "convert";
+  const fromAsset: Asset = item.fromAsset || "USDT";
+  const toAsset: Asset = item.toAsset || "ETH";
+  const fromAmount = fromAsset === "USDT" ? item.usdAmount : item.quantity;
+  const toAmount = toAsset === "USDT" ? item.usdAmount : item.quantity;
   return (
     <button className="transaction-row" onClick={onClick}>
-      <span className={`movement-icon ${item.type}`}>{item.type === "buy" ? "↙" : "↗"}</span>
-      <span className="transaction-main"><strong>{item.type === "buy" ? "Bought" : "Sold"} {item.asset}</strong><small>{new Date(`${item.date}T${item.time}`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · {money.format(item.rate)} / {item.asset}</small></span>
-      <span className="transaction-value"><strong>{item.type === "buy" ? "−" : "+"}{money.format(item.usdAmount)}</strong>{line?.realizedGain !== null && line?.realizedGain !== undefined ? <small className={line.realizedGain >= 0 ? "gain" : "loss"}>{signedMoney(line.realizedGain)} · {percent(line.realizedPercent || 0)}</small> : <small>{quantity(item.quantity, item.asset)}</small>}</span>
+      <span className={`movement-icon ${item.type}`}>{isConversion ? "⇄" : item.type === "buy" ? "↙" : "↗"}</span>
+      <span className="transaction-main"><strong>{isConversion ? `Converted ${fromAsset} → ${toAsset}` : `${item.type === "buy" ? "Bought" : "Sold"} ${item.asset}`}</strong><small>{new Date(`${item.date}T${item.time}`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · {isConversion ? `${money.format(item.rate)} USDT / ETH` : `${money.format(item.rate)} / ${item.asset}`}</small></span>
+      <span className="transaction-value"><strong>{isConversion ? quantity(toAmount, toAsset) : `${item.type === "buy" ? "−" : "+"}${money.format(item.usdAmount)}`}</strong>{line?.realizedGain !== null && line?.realizedGain !== undefined ? <small className={line.realizedGain >= 0 ? "gain" : "loss"}>{signedMoney(line.realizedGain)} · {percent(line.realizedPercent || 0)}</small> : <small>{isConversion ? `from ${quantity(fromAmount, fromAsset)}` : quantity(item.quantity, item.asset)}</small>}</span>
     </button>
   );
 }
 
 function EmptyLedger({ onAdd }: { onAdd: () => void }) {
-  return <div className="empty-state"><span>↙</span><strong>Your first movement starts here</strong><p>Add an ETH or USDT buy to begin calculating your position.</p><button onClick={onAdd}>Add a buy</button></div>;
+  return <div className="empty-state"><span>↙</span><strong>Your first movement starts here</strong><p>Add a USDT buy, then convert it to ETH to begin calculating your position.</p><button onClick={onAdd}>Add a buy</button></div>;
 }

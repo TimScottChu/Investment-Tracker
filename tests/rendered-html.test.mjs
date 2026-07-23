@@ -21,7 +21,8 @@ test("server-renders the Investment Tracker shell", async () => {
   assert.match(html, /TOTAL VALUE/);
   assert.match(html, /Your assets/);
   assert.match(html, /Saved on this device/);
-  assert.match(html, /v(?:<!-- -->)?1\.1\.1/);
+  assert.match(html, /v(?:<!-- -->)?1\.2\.0/);
   assert.match(html, /Feedback/);
+  assert.match(html, /ETH performance measured in USDT/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview|react-loading-skeleton/i);
 });

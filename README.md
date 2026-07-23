@@ -14,6 +14,7 @@ Mobile-first PWA for manually logging cryptocurrency buys and sells in USD.
 - CSV export and JSON backup/restore
 - Device-local storage and offline app shell
 - Versioned feedback journal with TXT export
+- USDT ⇄ ETH conversions with ETH gains measured in USDT
 
 No Binance account connection or API credentials are used. Transaction data remains in the browser unless exported.
 
